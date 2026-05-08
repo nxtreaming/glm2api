@@ -94,6 +94,57 @@ def test_streaming_tool_parser_never_leaks_dsml_markup_fragments():
     assert tool_calls[0]["function"]["arguments"] == '{"city":"上海"}'
 
 
+def test_parse_tool_calls_from_glm_malformed_dsml_markup():
+    text = (
+        '<|dsml|tool_calls|><|dsml|invoke name="shell"|>'
+        '<|dsml|parameter name="command"><![CDATA["powershell.exe", "-Command", '
+        '"Get-ChildItem -Force | Select-Object Name, Mode, Length"]]|>\n'
+        '</|dsMLparameter|><|dsml|parameter name="workdir"><![CDATA[E:\\Projects\\2api\\glm2api]]>'
+        '</|dsmlparameter|><|/dsmlinvoke|></|dsmltoolcalls|>'
+    )
+
+    clean, tool_calls = parse_tool_calls_from_text(text, {"shell"})
+
+    assert clean == ""
+    assert len(tool_calls) == 1
+    assert tool_calls[0]["function"]["name"] == "shell"
+    assert tool_calls[0]["function"]["arguments"] == (
+        '{"command":"\\"powershell.exe\\", \\"-Command\\", '
+        '\\"Get-ChildItem -Force | Select-Object Name, Mode, Length\\"","workdir":"E:\\\\Projects\\\\2api\\\\glm2api"}'
+    )
+
+
+def test_parse_tool_calls_repairs_json_array_at_cdata_boundary():
+    text = (
+        '<|DSML|tool_calls><|DSML|invoke name="shell">'
+        '<|DSML|parameter name="command"><![CDATA[["powershell.exe", "-Command", "pwd"]]></|DSML|parameter>'
+        '</|DSML|invoke></|DSML|tool_calls>'
+    )
+
+    clean, tool_calls = parse_tool_calls_from_text(text, {"shell"})
+
+    assert clean == ""
+    assert len(tool_calls) == 1
+    assert tool_calls[0]["function"]["arguments"] == '{"command":["powershell.exe","-Command","pwd"]}'
+
+
+def test_streaming_tool_parser_hides_glm_malformed_dsml_until_flush():
+    parser = StreamingToolParser(allowed_tool_names={"shell"})
+    payload = (
+        '<|dsml|tool_calls|><|dsml|invoke name="shell"|>'
+        '<|dsml|parameter name="command"><![CDATA[pwd]]|></|dsMLparameter|>'
+        '<|/dsmlinvoke|></|dsmltoolcalls|>'
+    )
+
+    visible_parts = [parser.consume(char) for char in payload]
+    tail, tool_calls = parser.flush()
+
+    assert "".join(visible_parts) == ""
+    assert tail == ""
+    assert len(tool_calls) == 1
+    assert tool_calls[0]["function"]["arguments"] == '{"command":"pwd"}'
+
+
 def test_parse_tool_calls_from_xml_markup():
     text = (
         "开始\n"

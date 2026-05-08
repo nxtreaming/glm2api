@@ -1,4 +1,9 @@
-from glm2api.services.translator import BLOCKED_NATIVE_TOOL_NAMES, GLMEventAccumulator, convert_messages
+from glm2api.services.translator import (
+    BLOCKED_NATIVE_TOOL_NAMES,
+    GLMEventAccumulator,
+    convert_messages,
+    sanitize_tool_call_payload,
+)
 
 
 def test_convert_messages_injects_xml_tool_prompt_and_history():
@@ -179,6 +184,34 @@ def test_accumulator_build_response_extracts_tool_call_from_reasoning_fallback()
     assert message["content"] is None
     assert message["tool_calls"][0]["function"]["name"] == "write"
     assert message["tool_calls"][0]["function"]["arguments"] == '{"filePath":"test.txt","content":""}'
+
+
+def test_sanitize_shell_command_argument_from_json_string():
+    cleaned = sanitize_tool_call_payload(
+        "shell",
+        {
+            "command": '["powershell.exe","-Command","Get-ChildItem -Force"]',
+            "workdir": "E:\\Projects\\2api\\glm2api",
+        },
+    )
+
+    assert cleaned == {
+        "command": ["powershell.exe", "-Command", "Get-ChildItem -Force"],
+        "workdir": "E:\\Projects\\2api\\glm2api",
+    }
+
+
+def test_sanitize_shell_command_argument_from_quoted_sequence():
+    cleaned = sanitize_tool_call_payload(
+        "shell",
+        {
+            "command": '"powershell.exe", "-Command", "Get-ChildItem -Force"',
+        },
+    )
+
+    assert cleaned == {
+        "command": ["powershell.exe", "-Command", "Get-ChildItem -Force"],
+    }
 
 
 def test_convert_messages_respects_tool_choice_none_and_specific():

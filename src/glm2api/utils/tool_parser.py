@@ -18,6 +18,22 @@ START_TAG_PATTERN = re.compile(
     re.IGNORECASE,
 )
 DSML_TAG_PATTERN = re.compile(r"</?\|DSML\|(?P<name>tool_calls|invoke|parameter|tool_result)\b", re.IGNORECASE)
+DSML_OPEN_TAG_PATTERN = re.compile(
+    r"<\|dsml\|(?P<name>tool_calls|toolcalls|invoke|parameter|tool_result|toolresult)\b(?P<attrs>[^<>]*?)>",
+    re.IGNORECASE,
+)
+DSML_CLOSE_TAG_PATTERN = re.compile(
+    r"</\|dsml\|(?P<name>tool_calls|toolcalls|invoke|parameter|tool_result|toolresult)\s*\|?\s*>",
+    re.IGNORECASE,
+)
+DSML_COMPACT_CLOSE_TAG_PATTERN = re.compile(
+    r"(?:</\|dsml|<\|/dsml)(?P<name>toolcalls|invoke|parameter|toolresult)\s*\|\s*>",
+    re.IGNORECASE,
+)
+DSML_TOOL_CALLS_CLOSE_PATTERN = re.compile(
+    r"(?:</\|dsml\|tool_calls\s*>|</\|dsml\|tool_calls\s*\|\s*>|</\|dsmltool_?calls\s*\|\s*>|<\|/dsmltool_?calls\s*\|\s*>)",
+    re.IGNORECASE,
+)
 PARAM_NAME_TAG_PATTERN = re.compile(r"<param_name>\s*(.*?)\s*</param_name>", re.IGNORECASE | re.DOTALL)
 PARAM_VALUE_TAG_PATTERN = re.compile(r"<param_value>\s*(.*?)\s*</param_value>", re.IGNORECASE | re.DOTALL)
 TAG_NAME_HINTS = [
@@ -64,8 +80,38 @@ def _local_name(tag: str) -> str:
     return tag.lower()
 
 
+def _canonical_dsml_name(name: str) -> str:
+    normalized = name.lower().replace("_", "")
+    if normalized == "toolcalls":
+        return "tool_calls"
+    if normalized == "toolresult":
+        return "tool_result"
+    return normalized
+
+
+def _repair_malformed_dsml(block: str) -> str:
+    if "<|" not in block and "]]|>" not in block:
+        return block
+
+    repaired = block.replace("]]|>", "]]>")
+
+    def replace_open(match: re.Match[str]) -> str:
+        name = _canonical_dsml_name(match.group("name"))
+        attrs = match.group("attrs").rstrip("|").rstrip()
+        return f"<|DSML|{name}{attrs}>"
+
+    def replace_close(match: re.Match[str]) -> str:
+        return f"</|DSML|{_canonical_dsml_name(match.group('name'))}>"
+
+    repaired = DSML_OPEN_TAG_PATTERN.sub(replace_open, repaired)
+    repaired = DSML_CLOSE_TAG_PATTERN.sub(replace_close, repaired)
+    repaired = DSML_COMPACT_CLOSE_TAG_PATTERN.sub(replace_close, repaired)
+    return repaired
+
+
 def _normalize_dsml_to_xml(block: str) -> str:
-    return DSML_TAG_PATTERN.sub(lambda match: match.group(0).replace("|DSML|", ""), block)
+    repaired = _repair_malformed_dsml(block)
+    return DSML_TAG_PATTERN.sub(lambda match: match.group(0).replace("|DSML|", ""), repaired)
 
 
 def _is_allowed_tool_name(tool_name: str, allowed_tool_names: set[str] | None) -> bool:
@@ -90,6 +136,11 @@ def _coerce_leaf_value(text: str) -> object:
         try:
             return json.loads(stripped)
         except json.JSONDecodeError:
+            if stripped.startswith("[") and not stripped.endswith("]"):
+                try:
+                    return json.loads(stripped + "]")
+                except json.JSONDecodeError:
+                    pass
             return stripped
     if stripped in {"true", "false"}:
         return stripped == "true"
@@ -298,7 +349,10 @@ def _mask_code_fences(text: str) -> str:
 
 def _find_matching_block(masked_text: str, start_match: re.Match[str]) -> tuple[int, int] | None:
     tag_name = start_match.group("tag").lower()
-    closing_pattern = re.compile(rf"</{re.escape(tag_name)}\s*>", re.IGNORECASE)
+    if tag_name == "|dsml|tool_calls":
+        closing_pattern = DSML_TOOL_CALLS_CLOSE_PATTERN
+    else:
+        closing_pattern = re.compile(rf"</{re.escape(tag_name)}\s*>", re.IGNORECASE)
     closing_match = closing_pattern.search(masked_text, start_match.end())
     if closing_match is None:
         return None
@@ -388,19 +442,25 @@ def _find_incomplete_block_start(text: str) -> int | None:
 
 
 def _find_partial_tag_start(text: str) -> int | None:
+    lowered_text = text.lower()
+    pipe_tag_start = lowered_text.rfind("<|")
+    if pipe_tag_start != -1 and ">" not in lowered_text[pipe_tag_start:]:
+        return pipe_tag_start
     for hint in TAG_NAME_HINTS:
+        lowered_hint = hint.lower()
         max_overlap = min(len(hint), len(text))
         for size in range(max_overlap, 0, -1):
-            if text.endswith(hint[:size]):
+            if lowered_text.endswith(lowered_hint[:size]):
                 return len(text) - size
     return None
 
 
 def _looks_like_tool_markup_fragment(text: str) -> bool:
     stripped = text.strip()
+    lowered = stripped.lower()
     if not stripped:
         return False
-    if stripped.startswith("<|DSML|") or stripped.startswith("</|DSML|"):
+    if lowered.startswith("<|dsml|") or lowered.startswith("</|dsml|") or lowered.startswith("<|/dsml"):
         return True
     if stripped.startswith("<ml_") or stripped.startswith("</ml_"):
         return True

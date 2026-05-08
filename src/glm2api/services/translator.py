@@ -98,6 +98,25 @@ def sanitize_tool_call_payload(
     if "param_name" in cleaned and "param_value" not in cleaned and len(cleaned) == 1:
         cleaned = {}
 
+    if tool_name == "shell":
+        command = cleaned.get("command")
+        if isinstance(command, str):
+            stripped_command = command.strip()
+            if stripped_command.startswith("["):
+                try:
+                    parsed_command = json.loads(stripped_command)
+                except json.JSONDecodeError:
+                    parsed_command = None
+                if isinstance(parsed_command, list):
+                    cleaned["command"] = [str(part) for part in parsed_command]
+            elif stripped_command.startswith('"'):
+                try:
+                    parsed_command = json.loads(f"[{stripped_command}]")
+                except json.JSONDecodeError:
+                    parsed_command = None
+                if isinstance(parsed_command, list):
+                    cleaned["command"] = [str(part) for part in parsed_command]
+
     return cleaned
 
 
@@ -463,6 +482,7 @@ class GLMEventAccumulator:
     _cached_part_reasonings: dict[str, str] = field(default_factory=dict)
     _server_side_tool_calls: list[dict[str, object]] = field(default_factory=list)
     _server_side_tool_call_ids: set[str] = field(default_factory=set)
+    _deferred_visible_text: str = ""
 
     def __post_init__(self) -> None:
         self.tool_parser.allowed_tool_names = self.allowed_tool_names
@@ -526,23 +546,26 @@ class GLMEventAccumulator:
 
         visible_text_delta = self.tool_parser.consume(text_delta)
         if visible_text_delta:
-            delta_payload: dict[str, object] = {"content": visible_text_delta}
-            if not self.emitted_role:
-                delta_payload = {"role": "assistant", "content": visible_text_delta}
-                self.emitted_role = True
-            chunks.append(
-                self._chunk_json(
-                    {
-                        "choices": [
-                            {
-                                "index": 0,
-                                "delta": delta_payload,
-                                "finish_reason": None,
-                            }
-                        ]
-                    }
+            if self.allowed_tool_names is not None:
+                self._deferred_visible_text += visible_text_delta
+            else:
+                delta_payload: dict[str, object] = {"content": visible_text_delta}
+                if not self.emitted_role:
+                    delta_payload = {"role": "assistant", "content": visible_text_delta}
+                    self.emitted_role = True
+                chunks.append(
+                    self._chunk_json(
+                        {
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "delta": delta_payload,
+                                    "finish_reason": None,
+                                }
+                            ]
+                        }
+                    )
                 )
-            )
         debug_dump(self.logger or logging.getLogger("glm2api.null"), self.debug_enabled, "GLM SSE 生成增量块", chunks)
         return chunks, str(payload.get("status")) if payload.get("status") is not None else None
 
@@ -570,10 +593,12 @@ class GLMEventAccumulator:
             )
 
         chunks: list[str] = []
-        if tail_text:
-            delta_payload: dict[str, object] = {"content": tail_text}
+        final_text = self._deferred_visible_text + tail_text
+        self._deferred_visible_text = ""
+        if final_text and not all_tool_calls:
+            delta_payload: dict[str, object] = {"content": final_text}
             if not self.emitted_role:
-                delta_payload = {"role": "assistant", "content": tail_text}
+                delta_payload = {"role": "assistant", "content": final_text}
                 self.emitted_role = True
             chunks.append(
                 self._chunk_json(
