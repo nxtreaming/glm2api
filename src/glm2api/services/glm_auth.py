@@ -69,6 +69,11 @@ class GLMAccessTokenManager:
         self._current_index = 0
         self._lock = threading.Lock()
         self._persist_lock = threading.Lock()
+        logger.info(
+            "账号管理器初始化 账号数=%s 游客模式=%s",
+            len(self._accounts),
+            any(a.is_guest for a in self._accounts),
+        )
 
     def get_browser_headers(self, app_fr: str = "browser_extension") -> dict[str, str]:
         return {
@@ -161,6 +166,7 @@ class GLMAccessTokenManager:
     def _get_access_token_for_index(self, account_index: int) -> str:
         account = self._accounts[account_index]
         if account.cached_token and time.time() < account.cached_token.expires_at - 60:
+            self.logger.debug("使用缓存 access_token account=%s 剩余=%.0fs", account_index, account.cached_token.expires_at - time.time())
             return account.cached_token.access_token
         account.cached_token = self._refresh_access_token(account_index)
         return account.cached_token.access_token

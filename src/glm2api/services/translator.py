@@ -28,12 +28,9 @@ from ..utils.tool_protocol import (
 
 ASSISTANT_ID_PATTERN = re.compile(r"^[a-z0-9]{24,}$")
 URL_PATTERN = re.compile(r"https?://[^\s<>()\"']+")
-CHERRY_FETCH_TOOL_NAMES = {
-    "mcp__CherryFetch__fetchHtml",
-    "mcp__CherryFetch__fetchMarkdown",
-    "mcp__CherryFetch__fetchTxt",
-    "mcp__CherryFetch__fetchJson",
-}
+
+
+
 def extract_text_content(content: object) -> str:
     if isinstance(content, str):
         return content
@@ -62,7 +59,7 @@ def extract_first_url(text: str) -> str | None:
     match = URL_PATTERN.search(text)
     if not match:
         return None
-    return match.group(0).rstrip(".,;:!?)]+")
+    return match.group(0).rstrip(".,;:!?)}+")
 
 
 def extract_recent_user_url(messages: list[dict[str, object]]) -> str | None:
@@ -98,14 +95,6 @@ def sanitize_tool_call_payload(
         cleaned = {}
     if "param_name" in cleaned and "param_value" not in cleaned and len(cleaned) == 1:
         cleaned = {}
-
-    if tool_name in CHERRY_FETCH_TOOL_NAMES:
-        url_value = cleaned.get("url")
-        if not isinstance(url_value, str) or not url_value.strip():
-            if fallback_url:
-                cleaned["url"] = fallback_url
-            else:
-                return None
 
     return cleaned
 
@@ -568,6 +557,16 @@ class GLMEventAccumulator:
             tc_copy["index"] = len(all_tool_calls)
             all_tool_calls.append(tc_copy)
 
+        if self.logger:
+            self.logger.info(
+                "响应收尾 status=%s text_len=%s reasoning_len=%s tool_calls=%s server_tools=%s",
+                status,
+                len(self._cached_full_text),
+                len(self._cached_full_reasoning),
+                len(xml_tool_calls),
+                len(self._server_side_tool_calls),
+            )
+
         chunks: list[str] = []
         if tail_text:
             delta_payload: dict[str, object] = {"content": tail_text}
@@ -708,6 +707,14 @@ class GLMEventAccumulator:
             ],
             "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
         }
+        if self.logger:
+            self.logger.info(
+                "非流式响应构建完成 model=%s text_len=%s reasoning_len=%s tool_calls=%s",
+                self.model,
+                len(final_content),
+                len(full_reasoning),
+                len(all_tool_calls),
+            )
         debug_dump(self.logger or logging.getLogger("glm2api.null"), self.debug_enabled, "GLM 非流式最终响应", response)
         return response
 

@@ -195,17 +195,23 @@ def ensure_env_file(env_path: Path) -> bool:
 
 
 def load_config(env_file: str = ".env") -> AppConfig:
+    import logging
+
+    logger = logging.getLogger("glm2api.config")
     env_path = Path(env_file)
     env_file_created = ensure_env_file(env_path)
     file_values = parse_dotenv(env_path)
     values = {**file_values, **os.environ}
+
     glm_max_concurrency = max(1, parse_int(values.get("GLM_MAX_CONCURRENCY"), 3))
     token_file_path = Path(values.get("GLM_TOKEN_FILE", "token.txt"))
     if not token_file_path.is_absolute():
         token_file_path = (env_path.parent / token_file_path).resolve()
+
     refresh_tokens = load_refresh_tokens(token_file_path)
     single_refresh_token = values.get("GLM_REFRESH_TOKEN", "").strip()
     explicit_guest_mode = parse_bool(values.get("GLM_USE_GUEST_REFRESH_TOKEN"), False) or is_guest_token_value(single_refresh_token)
+
     if explicit_guest_mode:
         refresh_tokens = [GUEST_REFRESH_TOKEN_MARKER] * glm_max_concurrency
         single_refresh_token = GUEST_REFRESH_TOKEN_MARKER
@@ -215,6 +221,7 @@ def load_config(env_file: str = ".env") -> AppConfig:
         refresh_tokens = [GUEST_REFRESH_TOKEN_MARKER] * glm_max_concurrency
         single_refresh_token = GUEST_REFRESH_TOKEN_MARKER
         explicit_guest_mode = True
+
     host = values.get("HOST", "127.0.0.1").strip() or "127.0.0.1"
     api_prefix = values.get("API_PREFIX", "/v1").strip()
     if not api_prefix:
@@ -266,11 +273,12 @@ def load_config(env_file: str = ".env") -> AppConfig:
         glm_busy_retry_interval=parse_float(values.get("GLM_BUSY_RETRY_INTERVAL_SECONDS"), 2.0),
         glm_guest_max_retries=max(0, parse_int(values.get("GLM_GUEST_MAX_RETRIES"), 3)),
         blocked_tool_names=parse_list(values.get("BLOCKED_TOOL_NAMES"), DEFAULT_BLOCKED_TOOL_NAMES),
-        exposed_models=exposed_models, # type: ignore
+        exposed_models=exposed_models,  # type: ignore
         model_aliases=model_aliases,
         server_api_keys=parse_list(values.get("SERVER_API_KEYS")),
         cors_allow_origin=values.get("CORS_ALLOW_ORIGIN", "*").strip() or "*",
     )
+
     if not (1 <= config.port <= 65535):
         raise ConfigError(f"端口配置超出范围: PORT={config.port}")
     if config.request_timeout <= 0:
@@ -281,4 +289,22 @@ def load_config(env_file: str = ".env") -> AppConfig:
         raise ConfigError(f"忙碌重试间隔不能小于 0: GLM_BUSY_RETRY_INTERVAL_SECONDS={config.glm_busy_retry_interval}")
     if not config.glm_base_url.startswith(("http://", "https://")):
         raise ConfigError(f"GLM_BASE_URL 必须以 http:// 或 https:// 开头: {config.glm_base_url}")
+
+    token_source = "游客模式" if explicit_guest_mode else (f"token 文件 ({token_file_path})" if token_file_path.exists() else ".env GLM_REFRESH_TOKEN")
+    logger.info(
+        "配置加载完成 端口=%s 并发=%s 账号数=%s token来源=%s 日志级别=%s",
+        config.port,
+        config.glm_max_concurrency,
+        len(config.glm_refresh_tokens),
+        token_source,
+        config.log_level,
+    )
+    logger.debug(
+        "配置详情 host=%s api_prefix=%s timeout=%ss 删除会话=%s 暴露模型=%s",
+        config.host,
+        config.api_prefix,
+        config.request_timeout,
+        config.glm_delete_conversation,
+        len(config.exposed_models),
+    )
     return config

@@ -5,6 +5,7 @@ import re
 
 
 BLOCKED_NATIVE_TOOL_NAMES = {
+    "open",
     "open_url",
     "open_ul",
     "browser.open",

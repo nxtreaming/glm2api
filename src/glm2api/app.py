@@ -19,6 +19,12 @@ class Application:
         setup_logging(config.log_level)
         self.config = config
         self.logger = get_logger("glm2api.app")
+        self.logger.info(
+            "初始化应用 并发=%s 账号数=%s 暴露模型=%s",
+            config.glm_max_concurrency,
+            len(config.glm_refresh_tokens),
+            len(config.exposed_models),
+        )
         self.client = GLMWebClient(config=config, logger=get_logger("glm2api.glm"))
         try:
             self.server = GLM2APIServer(
@@ -37,11 +43,10 @@ class Application:
         if self.config.env_file_created:
             self.logger.info("未检测到配置文件，已自动从默认示例复制: %s", self.config.env_file_path)
         self.logger.info(
-            "启动服务 host=%s port=%s prefix=%s concurrency=%s accounts=%s debug_dump_all=%s models=%s",
+            "启动服务 host=%s port=%s prefix=%s accounts=%s debug_dump_all=%s models=%s",
             self.config.host,
             self.config.port,
             self.config.api_prefix,
-            self.config.glm_max_concurrency,
             len(self.config.glm_refresh_tokens),
             self.config.debug_dump_all,
             ",".join(self.config.exposed_models),

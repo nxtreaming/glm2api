@@ -629,6 +629,7 @@ class GLMWebClient:
                 payload=final_event,
             )
 
+        self.logger.info("绘图完成 返回图片数=%s", len(data))
         return {
             "created": created,
             "data": data,
@@ -743,6 +744,8 @@ class GLMWebClient:
                         ref = self._upload_file_reference(url, is_image=False)
                         if ref:
                             refs.append(ref)
+        if refs:
+            self.logger.info("上传附件完成 成功数=%s", len(refs))
         return refs
 
     def _upload_file_reference(self, file_url: str, is_image: bool) -> dict[str, object] | None:

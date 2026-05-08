@@ -78,6 +78,7 @@ class GLM2APIServer:
                         )
                         return
 
+                    logger.debug("GET 未匹配 path=%s", self.path)
                     self._write_json(HTTPStatus.NOT_FOUND, {"error": {"message": "Not Found"}})
                 except _CLIENT_DISCONNECTED:
                     logger.warning("客户端在 GET 响应写回前断开 path=%s", self.path)
@@ -98,10 +99,12 @@ class GLM2APIServer:
                         f"{config.api_prefix}/messages",
                         f"{config.api_prefix}/responses",
                     }:
+                        logger.debug("POST 未匹配 path=%s", self.path)
                         self._write_json(HTTPStatus.NOT_FOUND, {"error": {"message": "Not Found"}})
                         return
 
                     if not self._authorize():
+                        logger.warning("认证失败 path=%s ip=%s", self.path, self.client_address[0])
                         self._write_json(HTTPStatus.UNAUTHORIZED, {"error": {"message": "Unauthorized"}})
                         return
 
@@ -144,11 +147,13 @@ class GLM2APIServer:
 
                     # --- Anthropic Messages API ---
                     if path == f"{config.api_prefix}/messages":
+                        logger.info("收到 Anthropic 请求 model=%s stream=%s", payload.get("model"), payload.get("stream"))
                         self._handle_anthropic_messages(payload)
                         return
 
                     # --- OpenAI Responses API ---
                     if path == f"{config.api_prefix}/responses":
+                        logger.info("收到 Responses 请求 model=%s stream=%s", payload.get("model"), payload.get("stream"))
                         self._handle_responses(payload)
                         return
 
@@ -160,6 +165,7 @@ class GLM2APIServer:
                                 {"error": {"message": "图片生成请求必须包含 prompt 字段。"}},
                             )
                             return
+                        logger.info("收到绘图请求 model=%s prompt=%s", payload.get("model"), payload.get("prompt"))
                         result = glm_client.generate_images(payload)
                         self._write_json(HTTPStatus.OK, result)
                         return
@@ -176,6 +182,7 @@ class GLM2APIServer:
                         self._stream_completion(payload)
                         return
 
+                    logger.info("收到 chat 请求 model=%s", payload.get("model"))
                     result, conversation_id = glm_client.chat_completion(payload)
                     self._write_json(HTTPStatus.OK, result)
                 except QueueTimeoutError as exc:
@@ -320,6 +327,8 @@ class GLM2APIServer:
             # ---- Chat completions (original) ----
 
             def _stream_completion(self, payload: dict[str, object]) -> None:
+                model = str(payload.get("model", "unknown"))
+                logger.info("开始流式响应 model=%s", model)
                 stream_iter = glm_client.stream_chat_completion(payload)
                 self.send_response(HTTPStatus.OK)
                 self._send_common_headers()
@@ -332,7 +341,7 @@ class GLM2APIServer:
                 try:
                     for chunk in stream_iter:
                         if chunk:
-                            debug_dump(logger, config.debug_dump_all, f"HTTP 出站流式分片 model={payload.get('model')}", chunk)
+                            debug_dump(logger, config.debug_dump_all, f"HTTP 出站流式分片 model={model}", chunk)
                             self.wfile.write(chunk)
                             self.wfile.flush()
                             if b"data: [DONE]\n\n" in chunk:
@@ -341,10 +350,10 @@ class GLM2APIServer:
                     logger.warning("流式请求中途收到上游错误 status=%s error=%s", exc.status_code, exc)
                     self._write_sse_error(str(exc), "upstream_error")
                 except _CLIENT_DISCONNECTED as exc:
-                    logger.warning("客户端在流式响应过程中断开 model=%s error=%s", payload.get("model"), exc)
+                    logger.warning("客户端在流式响应过程中断开 model=%s error=%s", model, exc)
                     return
                 except Exception as exc:
-                    logger.error("流式请求失败 model=%s error=%s\n%s", payload.get("model"), exc, traceback.format_exc())
+                    logger.error("流式请求失败 model=%s error=%s\n%s", model, exc, traceback.format_exc())
                     self._write_sse_error(str(exc), exc.__class__.__name__)
                 finally:
                     if not sent_done:
@@ -353,7 +362,7 @@ class GLM2APIServer:
                             self.wfile.flush()
                         except _CLIENT_DISCONNECTED:
                             pass
-                logger.info("流式请求完成 model=%s", payload.get("model"))
+                logger.info("流式请求完成 model=%s", model)
 
             # ---- Auth ----
 
